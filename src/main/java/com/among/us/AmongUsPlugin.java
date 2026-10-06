@@ -273,4 +273,132 @@ public class AmongUsPlugin extends JavaPlugin implements Listener, CommandExecut
     @EventHandler
     public void onInventoryClick(InventoryClickEvent event) {
         if (!event.getView().getTitle().equals(GUI_TITLE)) return;
+
+        event.setCancelled(true);
+
+        if (!(event.getWhoClicked() instanceof Player)) return;
+        Player voter = (Player) event.getWhoClicked();
+
+        if (currentState != GameState.MEETING) return;
+        if (hasVoted.contains(voter.getUniqueId())) {
+            voter.sendMessage(ChatColor.RED + "Kamu sudah menggunakan hak pilihmu!");
+            return;
+        }
+
+        ItemStack clicked = event.getCurrentItem();
+        if (clicked == null || !clicked.hasItemMeta()) return;
+
+        if (clicked.getType() == Material.BARRIER) {
+            hasVoted.add(voter.getUniqueId());
+            voter.sendMessage(ChatColor.YELLOW + "Kamu telah memilih untuk SKIP vote.");
+            voter.closeInventory();
+            checkAllVoted();
+            return;
+        }
+
+        if (clicked.getType() == Material.PLAYER_HEAD) {
+            SkullMeta meta = (SkullMeta) clicked.getItemMeta();
+            if (meta != null && meta.getOwningPlayer() != null) {
+                UUID targetUUID = meta.getOwningPlayer().getUniqueId();
+                String targetName = meta.getOwningPlayer().getName();
+
+                votes.put(voter.getUniqueId(), targetUUID);
+                hasVoted.add(voter.getUniqueId());
+
+                voter.sendMessage(ChatColor.GREEN + "Kamu memvoting: " + targetName);
+                voter.closeInventory();
+                checkAllVoted();
+            }
+        }
+    }
+
+    private void checkAllVoted() {
+        if (hasVoted.size() >= Bukkit.getOnlinePlayers().size()) {
+            tallyVotesAndEject();
+        }
+    }
+
+    private void tallyVotesAndEject() {
+        if (currentState != GameState.MEETING) return;
+
+        currentState = GameState.IN_GAME;
+
+        Map<UUID, Integer> voteCounts = new HashMap<>();
+        for (UUID votedTarget : votes.values()) {
+            voteCounts.put(votedTarget, voteCounts.getOrDefault(votedTarget, 0) + 1);
+        }
+
+        UUID mostVotedUUID = null;
+        int maxVotes = 0;
+        boolean isTie = false;
+
+        for (Map.Entry<UUID, Integer> entry : voteCounts.entrySet()) {
+            if (entry.getValue() > maxVotes) {
+                maxVotes = entry.getValue();
+                mostVotedUUID = entry.getKey();
+                isTie = false;
+            } else if (entry.getValue() == maxVotes) {
+                isTie = true;
+            }
+        }
+
+        if (isTie || mostVotedUUID == null) {
+            Bukkit.broadcastMessage(ChatColor.YELLOW + "[Meeting] Hasil seimbang atau mayoritas skip! Tidak ada yang dikeluarkan.");
+        } else {
+            Player ejectedPlayer = Bukkit.getPlayer(mostVotedUUID);
+            if (ejectedPlayer != null) {
+                boolean wasImpostor = impostors.contains(ejectedPlayer.getUniqueId());
+                Bukkit.broadcastMessage(ChatColor.RED + ejectedPlayer.getName() + " telah dikeluarkan!");
                 
+                if (wasImpostor) {
+                    Bukkit.broadcastMessage(ChatColor.RED + ejectedPlayer.getName() + " adalah Impostor!");
+                    impostors.remove(ejectedPlayer.getUniqueId());
+                } else {
+                    Bukkit.broadcastMessage(ChatColor.GRAY + ejectedPlayer.getName() + " BUKAN Impostor.");
+                    crewmates.remove(ejectedPlayer.getUniqueId());
+                }
+
+                ejectedPlayer.setHealth(0);
+            }
+        }
+
+        if (isLightsSabotaged) {
+            for (UUID uuid : crewmates) {
+                Player p = Bukkit.getPlayer(uuid);
+                if (p != null && p.isOnline()) {
+                    p.addPotionEffect(new PotionEffect(PotionEffectType.BLINDNESS, Integer.MAX_VALUE, 1, false, false));
+                    p.addPotionEffect(new PotionEffect(PotionEffectType.DARKNESS, Integer.MAX_VALUE, 1, false, false));
+                }
+            }
+        }
+
+        checkWinCondition();
+    }
+
+    private void checkWinCondition() {
+        if (impostors.isEmpty()) {
+            Bukkit.broadcastMessage(ChatColor.GREEN + "=================================");
+            Bukkit.broadcastMessage(ChatColor.GREEN + "CREWMATES WIN! Semua Impostor telah tereliminasi/di-eject.");
+            Bukkit.broadcastMessage(ChatColor.GREEN + "=================================");
+            endGame();
+        } else if (totalTasksRequired > 0 && totalTasksCompleted >= totalTasksRequired) {
+            Bukkit.broadcastMessage(ChatColor.GREEN + "=================================");
+            Bukkit.broadcastMessage(ChatColor.GREEN + "CREWMATES WIN! Semua Task telah diselesaikan.");
+            Bukkit.broadcastMessage(ChatColor.GREEN + "=================================");
+            endGame();
+        } else if (impostors.size() >= crewmates.size()) {
+            Bukkit.broadcastMessage(ChatColor.RED + "=================================");
+            Bukkit.broadcastMessage(ChatColor.RED + "IMPOSTORS WIN! Jumlah Impostor menyamai Crewmates.");
+            Bukkit.broadcastMessage(ChatColor.RED + "=================================");
+            endGame();
+        }
+    }
+
+    private void endGame() {
+        currentState = GameState.LOBBY;
+        isLightsSabotaged = false;
+        for (Player p : Bukkit.getOnlinePlayers()) {
+            p.removeAllCustomEffects();
+        }
+    }
+}
