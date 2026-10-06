@@ -33,21 +33,28 @@ public class AmongUsPlugin extends JavaPlugin implements Listener, CommandExecut
     private final Set<UUID> crewmates = new HashSet<>();
     
     // Tracking Voting System
-    private final Map<UUID, UUID> votes = new HashMap<>(); // Voter -> Voted Target UUID
+    private final Map<UUID, UUID> votes = new HashMap<>();
     private final Set<UUID> hasVoted = new HashSet<>();
     private final String GUI_TITLE = ChatColor.RED + "Emergency Meeting - Vote!";
 
     // Tracking Sabotage
     private boolean isLightsSabotaged = false;
 
+    // Tracking Tasks System
+    private final Map<UUID, Integer> playerTasksRemaining = new HashMap<>();
+    private final int TASKS_PER_CREWMATE = 3;
+    private int totalTasksRequired = 0;
+    private int totalTasksCompleted = 0;
+
     @Override
     public void onEnable() {
         getServer().getPluginManager().registerEvents(this, this);
         Objects.requireNonNull(getCommand("amongus")).setExecutor(this);
+        Objects.requireNonNull(getCommand("sabotage")).setExecutor(this);
         getLogger().info("AmongUsPlugin berhasil diaktifkan!");
     }
 
-    // --- COMMAND SYSTEM (/amongus start & /sabotage lights) ---
+    // --- COMMAND SYSTEM ---
     @Override
     public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
         if (!(sender instanceof Player)) {
@@ -102,7 +109,9 @@ public class AmongUsPlugin extends JavaPlugin implements Listener, CommandExecut
         crewmates.clear();
         votes.clear();
         hasVoted.clear();
+        playerTasksRemaining.clear();
         isLightsSabotaged = false;
+        totalTasksCompleted = 0;
 
         // Acak pemain untuk menentukan Impostor
         Collections.shuffle(players);
@@ -110,18 +119,22 @@ public class AmongUsPlugin extends JavaPlugin implements Listener, CommandExecut
         impostors.add(impostorPlayer.getUniqueId());
 
         for (Player p : players) {
-            p.removeAllCustomEffects(); // Hapus efek potion lama
+            p.removeAllCustomEffects();
             if (!p.getUniqueId().equals(impostorPlayer.getUniqueId())) {
                 crewmates.add(p.getUniqueId());
-                p.sendTitle(ChatColor.GREEN + "CREWMATE", ChatColor.WHITE + "Selesaikan semua task!", 10, 70, 20);
+                playerTasksRemaining.put(p.getUniqueId(), TASKS_PER_CREWMATE);
+                p.sendTitle(ChatColor.GREEN + "CREWMATE", ChatColor.WHITE + "Selesaikan " + TASKS_PER_CREWMATE + " Task di Crafting Table!", 10, 70, 20);
             }
         }
 
+        // Hitung total task yang dibutuhkan Crewmates untuk menang
+        totalTasksRequired = crewmates.size() * TASKS_PER_CREWMATE;
+
         impostorPlayer.sendTitle(ChatColor.RED + "IMPOSTOR", ChatColor.GRAY + "Eliminasi semua crewmate!", 10, 70, 20);
-        Bukkit.broadcastMessage(ChatColor.GOLD + "[AmongUs] Permainan dimulai!");
+        Bukkit.broadcastMessage(ChatColor.GOLD + "[AmongUs] Permainan dimulai! Total Task Crewmate: " + totalTasksRequired);
     }
 
-    // --- FITUR SABOTAGE: MATI LAMPU ---
+    // --- FITUR SABOTAGE ---
     private void triggerLightsSabotage(Player impostor) {
         if (isLightsSabotaged) {
             impostor.sendMessage(ChatColor.RED + "Lampu sudah dalam keadaan mati/disabotase!");
@@ -131,10 +144,9 @@ public class AmongUsPlugin extends JavaPlugin implements Listener, CommandExecut
         isLightsSabotaged = true;
         Bukkit.broadcastMessage(ChatColor.RED + "=================================");
         Bukkit.broadcastMessage(ChatColor.DARK_RED + "⚠ SABOTAGE: Lampu dipadamkan!");
-        Bukkit.broadcastMessage(ChatColor.YELLOW + "Crewmate harus memperbaiki Lever untuk menyalakan kembali lampu.");
+        Bukkit.broadcastMessage(ChatColor.YELLOW + "Crewmate harus klik Lever untuk menyalakan lampu kembali.");
         Bukkit.broadcastMessage(ChatColor.RED + "=================================");
 
-        // Berikan efek kebutaan (Blindness) & kegelapan (Darkness) khusus Crewmate
         for (UUID uuid : crewmates) {
             Player p = Bukkit.getPlayer(uuid);
             if (p != null && p.isOnline()) {
@@ -145,7 +157,7 @@ public class AmongUsPlugin extends JavaPlugin implements Listener, CommandExecut
         }
     }
 
-    // --- INTERACT EVENT (VENT, EMERGENCY BUTTON, & FIX SABOTAGE) ---
+    // --- INTERACT EVENT (VENT, EMERGENCY BUTTON, SABOTAGE FIX, & TASK) ---
     @EventHandler
     public void onInteract(PlayerInteractEvent event) {
         Player player = event.getPlayer();
@@ -153,7 +165,7 @@ public class AmongUsPlugin extends JavaPlugin implements Listener, CommandExecut
         if (event.getAction() == Action.RIGHT_CLICK_BLOCK && event.getClickedBlock() != null) {
             Material clickedType = event.getClickedBlock().getType();
 
-            // 1. Fitur Vent khusus Impostor (Klik Kanan Iron Trapdoor)
+            // 1. Vent (Iron Trapdoor) - Khusus Impostor
             if (currentState == GameState.IN_GAME && clickedType == Material.IRON_TRAPDOOR) {
                 if (impostors.contains(player.getUniqueId())) {
                     Location loc = player.getLocation();
@@ -165,22 +177,51 @@ public class AmongUsPlugin extends JavaPlugin implements Listener, CommandExecut
                 }
             }
 
-            // 2. Emergency Meeting Button (Klik Kanan Button/Tombol)
-            if ((currentState == GameState.IN_GAME) && (clickedType == Material.OAK_BUTTON || clickedType == Material.POLISHED_BLACKSTONE_BUTTON)) {
+            // 2. Emergency Button (Button/Tombol)
+            if (currentState == GameState.IN_GAME && (clickedType == Material.OAK_BUTTON || clickedType == Material.POLISHED_BLACKSTONE_BUTTON)) {
                 triggerEmergencyMeeting(player);
             }
 
-            // 3. Perbaikan Sabotage Lampu (Klik Kanan Lever)
+            // 3. Fix Sabotage Lampu (Lever)
             if (currentState == GameState.IN_GAME && clickedType == Material.LEVER && isLightsSabotaged) {
                 fixLightsSabotage(player);
             }
+
+            // 4. Task System (Crafting Table) - Khusus Crewmate
+            if (currentState == GameState.IN_GAME && clickedType == Material.CRAFTING_TABLE) {
+                event.setCancelled(true); // Cegah membuka crafting GUI asli
+                completeTaskForPlayer(player);
+            }
         }
+    }
+
+    // --- PILOT LOGIK TASK CREWMATE ---
+    private void completeTaskForPlayer(Player player) {
+        if (impostors.contains(player.getUniqueId())) {
+            player.sendMessage(ChatColor.RED + "Impostor tidak bisa menyelesaikan Task!");
+            return;
+        }
+
+        int remaining = playerTasksRemaining.getOrDefault(player.getUniqueId(), 0);
+        if (remaining <= 0) {
+            player.sendMessage(ChatColor.GREEN + "Semua task kamu sudah selesai!");
+            return;
+        }
+
+        remaining--;
+        totalTasksCompleted++;
+        playerTasksRemaining.put(player.getUniqueId(), remaining);
+
+        player.playSound(player.getLocation(), Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1.0f, 1.0f);
+        player.sendMessage(ChatColor.GREEN + "[Task] Kamu menyelesaikan 1 Task! (Sisa task kamu: " + remaining + ")");
+        Bukkit.broadcastMessage(ChatColor.AQUA + "[Task Progress] " + totalTasksCompleted + "/" + totalTasksRequired + " total task selesai.");
+
+        checkWinCondition();
     }
 
     private void fixLightsSabotage(Player fixer) {
         isLightsSabotaged = false;
 
-        // Hapus efek buta dari seluruh pemain
         for (Player p : Bukkit.getOnlinePlayers()) {
             p.removePotionEffect(PotionEffectType.BLINDNESS);
             p.removePotionEffect(PotionEffectType.DARKNESS);
@@ -190,13 +231,12 @@ public class AmongUsPlugin extends JavaPlugin implements Listener, CommandExecut
         Bukkit.broadcastMessage(ChatColor.GREEN + "[Sabotage] " + fixer.getName() + " telah memperbaiki lampu!");
     }
 
-    // --- TRIGGER EMERGENCY MEETING ---
+    // --- EMERGENCY MEETING & VOTING SYSTEM ---
     private void triggerEmergencyMeeting(Player caller) {
         currentState = GameState.MEETING;
         votes.clear();
         hasVoted.clear();
 
-        // Saat meeting dimulai, bersihkan sementara efek sabotage
         for (Player p : Bukkit.getOnlinePlayers()) {
             p.removePotionEffect(PotionEffectType.BLINDNESS);
             p.removePotionEffect(PotionEffectType.DARKNESS);
@@ -215,7 +255,6 @@ public class AmongUsPlugin extends JavaPlugin implements Listener, CommandExecut
         Bukkit.getScheduler().runTaskLater(this, this::tallyVotesAndEject, 30 * 20L);
     }
 
-    // --- OPEN VOTING GUI ---
     private void openVotingGUI(Player player) {
         Inventory gui = Bukkit.createInventory(null, 27, GUI_TITLE);
 
@@ -242,6 +281,144 @@ public class AmongUsPlugin extends JavaPlugin implements Listener, CommandExecut
             skipItem.setItemMeta(skipMeta);
         }
         gui.setItem(22, skipItem);
+
+        player.openInventory(gui);
+    }
+
+    @EventHandler
+    public void onInventoryClick(InventoryClickEvent event) {
+        if (!event.getView().getTitle().equals(GUI_TITLE)) return;
+
+        event.setCancelled(true);
+
+        if (!(event.getWhoClicked() instanceof Player)) return;
+        Player voter = (Player) event.getWhoClicked();
+
+        if (currentState != GameState.MEETING) return;
+        if (hasVoted.contains(voter.getUniqueId())) {
+            voter.sendMessage(ChatColor.RED + "Kamu sudah menggunakan hak pilihmu!");
+            return;
+        }
+
+        ItemStack clicked = event.getCurrentItem();
+        if (clicked == null || !clicked.hasItemMeta()) return;
+
+        if (clicked.getType() == Material.BARRIER) {
+            hasVoted.add(voter.getUniqueId());
+            voter.sendMessage(ChatColor.YELLOW + "Kamu telah memilih untuk SKIP vote.");
+            voter.closeInventory();
+            checkAllVoted();
+            return;
+        }
+
+        if (clicked.getType() == Material.PLAYER_HEAD) {
+            SkullMeta meta = (SkullMeta) clicked.getItemMeta();
+            if (meta != null && meta.getOwningPlayer() != null) {
+                UUID targetUUID = meta.getOwningPlayer().getUniqueId();
+                String targetName = meta.getOwningPlayer().getName();
+
+                votes.put(voter.getUniqueId(), targetUUID);
+                hasVoted.add(voter.getUniqueId());
+
+                voter.sendMessage(ChatColor.GREEN + "Kamu memvoting: " + targetName);
+                voter.closeInventory();
+                checkAllVoted();
+            }
+        }
+    }
+
+    private void checkAllVoted() {
+        if (hasVoted.size() >= Bukkit.getOnlinePlayers().size()) {
+            tallyVotesAndEject();
+        }
+    }
+
+    private void tallyVotesAndEject() {
+        if (currentState != GameState.MEETING) return;
+
+        currentState = GameState.IN_GAME;
+
+        Map<UUID, Integer> voteCounts = new HashMap<>();
+        for (UUID votedTarget : votes.values()) {
+            voteCounts.put(votedTarget, voteCounts.getOrDefault(votedTarget, 0) + 1);
+        }
+
+        UUID mostVotedUUID = null;
+        int maxVotes = 0;
+        boolean isTie = false;
+
+        for (Map.Entry<UUID, Integer> entry : voteCounts.entrySet()) {
+            if (entry.getValue() > maxVotes) {
+                maxVotes = entry.getValue();
+                mostVotedUUID = entry.getKey();
+                isTie = false;
+            } else if (entry.getValue() == maxVotes) {
+                isTie = true;
+            }
+        }
+
+        if (isTie || mostVotedUUID == null) {
+            Bukkit.broadcastMessage(ChatColor.YELLOW + "[Meeting] Hasil seimbang atau mayoritas skip! Tidak ada yang dikeluarkan.");
+        } else {
+            Player ejectedPlayer = Bukkit.getPlayer(mostVotedUUID);
+            if (ejectedPlayer != null) {
+                boolean wasImpostor = impostors.contains(ejectedPlayer.getUniqueId());
+                Bukkit.broadcastMessage(ChatColor.RED + ejectedPlayer.getName() + " telah dikeluarkan!");
+                
+                if (wasImpostor) {
+                    Bukkit.broadcastMessage(ChatColor.RED + ejectedPlayer.getName() + " adalah Impostor!");
+                    impostors.remove(ejectedPlayer.getUniqueId());
+                } else {
+                    Bukkit.broadcastMessage(ChatColor.GRAY + ejectedPlayer.getName() + " BUKAN Impostor.");
+                    crewmates.remove(ejectedPlayer.getUniqueId());
+                }
+
+                ejectedPlayer.setHealth(0);
+            }
+        }
+
+        if (isLightsSabotaged) {
+            for (UUID uuid : crewmates) {
+                Player p = Bukkit.getPlayer(uuid);
+                if (p != null && p.isOnline()) {
+                    p.addPotionEffect(new PotionEffect(PotionEffectType.BLINDNESS, Integer.MAX_VALUE, 1, false, false));
+                    p.addPotionEffect(new PotionEffect(PotionEffectType.DARKNESS, Integer.MAX_VALUE, 1, false, false));
+                }
+            }
+        }
+
+        checkWinCondition();
+    }
+
+    // --- CEK KONDISI KEMENANGAN ---
+    private void checkWinCondition() {
+        if (impostors.isEmpty()) {
+            Bukkit.broadcastMessage(ChatColor.GREEN + "=================================");
+            Bukkit.broadcastMessage(ChatColor.GREEN + "CREWMATES WIN! Semua Impostor telah tereliminasi/di-eject.");
+            Bukkit.broadcastMessage(ChatColor.GREEN + "=================================");
+            endGame();
+        } else if (totalTasksRequired > 0 && totalTasksCompleted >= totalTasksRequired) {
+            Bukkit.broadcastMessage(ChatColor.GREEN + "=================================");
+            Bukkit.broadcastMessage(ChatColor.GREEN + "CREWMATES WIN! Semua Task telah diselesaikan.");
+            Bukkit.broadcastMessage(ChatColor.GREEN + "=================================");
+            endGame();
+        } else if (impostors.size() >= crewmates.size()) {
+            Bukkit.broadcastMessage(ChatColor.RED + "=================================");
+            Bukkit.broadcastMessage(ChatColor.RED + "IMPOSTORS WIN! Jumlah Impostor menyamai Crewmates.");
+            Bukkit.broadcastMessage(ChatColor.RED + "=================================");
+            endGame();
+        }
+    }
+
+    private void endGame() {
+        currentState = GameState.LOBBY;
+        isLightsSabotaged = false;
+        for (Player p : Bukkit.getOnlinePlayers()) {
+            p.removeAllCustomEffects();
+        }
+    }
+}
+etItem(22, skipItem);
 
         player.openInventory(gui);
     }
