@@ -1,0 +1,12 @@
+name: AmongUsPlugin
+version: '${project.version}'
+main: com.among.us.AmongUsPlugin
+api-version: '1.20'
+commands:
+  amongus:
+    description: Memulai permainan Among Us
+    usage: /amongus start
+  sabotage:
+    description: Melakukan sabotage (Khusus Impostor)
+    usage: /sabotage lights
+    
