@@ -15,7 +15,7 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Set up JDK 17
-      uses: actions/installation-java@v4
+      uses: actions/setup-java@v4
       with:
         distribution: 'temurin'
         java-version: '17'
@@ -34,4 +34,3 @@ jobs:
       with:
         name: AmongUsPlugin-JAR
         path: build/libs/*.jar
-        
