@@ -1,4 +1,4 @@
-name: Build Among Us Plugin
+name: Build Among Us Plugin (Maven)
 
 on:
   push:
@@ -19,15 +19,13 @@ jobs:
       with:
         distribution: 'temurin'
         java-version: '17'
+        cache: 'maven'
 
-    - name: Setup Gradle
-      uses: gradle/actions/setup-gradle@v3
-
-    - name: Build with Gradle
-      run: gradle build
+    - name: Build with Maven
+      run: mvn clean package --batch-mode
 
     - name: Upload Plugin Artifact (.jar)
       uses: actions/upload-artifact@v4
       with:
         name: AmongUsPlugin-JAR
-        path: build/libs/*.jar
+        path: target/*.jar
