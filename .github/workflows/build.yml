@@ -29,3 +29,4 @@ jobs:
       with:
         name: AmongUsPlugin-JAR
         path: target/*.jar
+
