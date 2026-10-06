@@ -1,9 +1,0 @@
-name: AmongUsPlugin
-version: 1.0
-main: com.amongus.AmongUsPlugin
-api-version: 1.20
-commands:
-  amongus:
-    description: Perintah utama Among Us
-    permission: amongus.admin
-    
